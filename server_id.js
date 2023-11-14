@@ -1,7 +1,30 @@
 const WebSocket = require('ws');
 const crypto = require('crypto');
+const fs = require('fs');
+const https = require('https');
+require('dotenv').config();
 
-const wss = new WebSocket.Server({ port: 8080 });
+
+let wss;
+if (process.env.ENVIRONMENT==='development'){
+  wss = new WebSocket.Server({ port: 8080 });
+} else {
+  const serverOptions = {
+    cert: fs.readFileSync(process.env.SSL_CERT_PATH),
+    key: fs.readFileSync(process.env.SSL_KEY_PATH)
+  };
+
+  // Create an HTTPS server with your SSL options
+  const httpsServer = https.createServer(serverOptions);
+  httpsServer.listen(8080);
+
+  // Pass the HTTPS server to the WebSocket server
+  wss = new WebSocket.Server({ server: httpsServer });
+}
+
+
+
+
 
 // Room management data structure
 const rooms = new Map();
@@ -89,8 +112,8 @@ wss.on('connection', (ws) => {
                         room.players.push(userId);
 
                         // Send a response to the client indicating that they have joined the room
-                        const wsResponse = { 
-                            type: 'wsRoomJoined', 
+                        const wsResponse = {
+                            type: 'wsRoomJoined',
                             roomId: room.id,
                             userId: userId,
                             NoP: room.players.length,
@@ -167,7 +190,7 @@ wss.on('connection', (ws) => {
                         };
                         console.log('Game Started');
                         ws.send(JSON.stringify(wsResponse));
-                        
+
                         room.players.forEach(playerId => {
                             if (connectedUsers.get(playerId)) {
                                 connectedUsers.get(playerId).send(JSON.stringify(response));
@@ -349,13 +372,13 @@ wss.on('connection', (ws) => {
                                     } else {
                                         console.log("16) Game is already over")
                                     }
-                                    
+
                                 }
-                                
+
                             }
-                            processAnswer();  
+                            processAnswer();
                         }
-                          
+
                     }
                 } else {
                     const errorResponse = {
@@ -451,72 +474,12 @@ wss.on('connection', (ws) => {
                                 const playerIndex = gem.playersAnsweredCorrectly.indexOf(userId);
                                 gem.playersAnsweredCorrectly.splice(playerIndex, 1);
                             }
-                        //Check if game should end now
-                        
-                            /*if (!gem.finished) {
-                                if (compareLists(gem.playersAnswered, room.players)) {
-                                    gem.finished = true;
-                                }
-                                if (gem.finished && compareCorrectAnswerLists(gem.playersAnsweredCorrectly, room.players)) {
-                                    gem.correct = true;
-                                }
-                                if (gem.finished) {
-                                    room.finishedGems++;
-                                }
-                                if (gem.correct) {
-                                    gem.correctGems++;
-                                }
-                                if (room.finishedGems === room.gems.length) {
-                                    if (room.correctGems === room.gems.length) {
-                                        const response = {
-                                            type: 'gameFinishedSuccess',
-                                            roomId: roomId,
 
-                                        };
-                                        const hostResponse = {
-                                            type: 'gameFinishedSuccessHost',
-                                            roomId: roomId,
-
-                                        };
-                                        console.log('Game Finished. Players Won');
-                                        if (connectedUsers.get(room.host)) {
-                                            connectedUsers.get(room.host).send(JSON.stringify(hostResponse));
-                                        }
-
-                                        room.players.forEach(playerId => {
-                                            if (connectedUsers.get(playerId)) {
-                                                connectedUsers.get(playerId).send(JSON.stringify(response));
-                                            }
-                                        });
-                                    } else {
-                                        const response = {
-                                            type: 'gameFinishedFailure',
-                                            roomId: roomId,
-
-                                        };
-                                        const hostResponse = {
-                                            type: 'gameFinishedFailureHost',
-                                            roomId: roomId,
-
-                                        };
-                                        console.log('Game Finished. Players Won');
-                                        if (connectedUsers.get(room.host)) {
-                                            connectedUsers.get(room.host).send(JSON.stringify(hostResponse));
-                                        }
-
-                                        room.players.forEach(playerId => {
-                                            if (connectedUsers.get(playerId)) {
-                                                connectedUsers.get(playerId).send(JSON.stringify(response));
-                                            }
-                                        });
-                                    }
-                                }
-                            }*/
                         }
-                        
+
                     });
                 }
-               
+
             }
             //Check if room has 0 players and if the room is currently playing to be removed
             if (room.players.length === 0 && room.currentlyPlaying) {
@@ -565,13 +528,13 @@ function compareCorrectAnswerLists(listA, listB) {
 
 async function waitForBothAnswers(foundGem, room) {
     return new Promise(resolve => {
-        // Check if both answers are present in the 'foundGem.playersAnswered' array
-        
+
+
         const intervalId = setInterval(() => {
             if (compareLists(foundGem.playersAnswered, room.players)) {
                 clearInterval(intervalId);
                 resolve();
             }
-        }, 100); // Adjust the interval duration as needed
+        }, 100);
     });
 }
