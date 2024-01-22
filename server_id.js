@@ -32,20 +32,26 @@ const connectedUsers = new Map();
 
 
 wss.on('connection', (ws) => {
-    console.log('Client connected');
+
     const userId = generateRandomId();
     connectedUsers.set(userId, ws);
-
+    console.log('Client connected! userId: ', userId);
     ws.on('message', (message) => {
         const data = JSON.parse(message);
         if (data.type === 'createRoom')
         {
+            // Generate a random 6-digit room code and ensure it's unique
+            let roomId;
+            do {
+                roomId = generateRandomRoomCode();
+            } while (rooms.has(roomId));
+
             // Validate the request and check if the room name is unique
-            if (!rooms.has(data.roomName)) {
+            if (!rooms.has(roomId)) {
                 // Create Room
                 const room = {
-                    id: data.modCode,
-                    name: data.roomName,
+                    id: roomId,
+                    creationTime: new Date().getTime(),
                     maxPlayers: data.maxPlayers,
                     players: [], // Add the clients to the room
                     host: userId, // Store the host
@@ -54,6 +60,7 @@ wss.on('connection', (ws) => {
                     gems: [],
                     correctGems: 0,
                     finishedGems: 0,
+                    modInfoJson: data.modInfoJson,
                     currentlyPlaying: false,
                     finishedPlayers: [],
                     gameIsFinished: false,
@@ -75,15 +82,17 @@ wss.on('connection', (ws) => {
                     console.log("Gem id: ", gem.id, ", iaId: ", gem.iaId, ", locId: ", gem.locId);
                 }
                 // Add room to the Map
-                rooms.set(data.roomName, room);
-                console.log('Room Created');
+                rooms.set(roomId, room);
+                console.log(`Room Created with id ${room.id}`);
+                console.log(rooms.get(roomId).id);
                 // Create response for the room host
                 const response = {
                     type: 'roomCreated',
                     roomId: room.id,
                     userId: userId,
                     NoP: room.players.length,
-                    mNoP: room.maxPlayers
+                    mNoP: room.maxPlayers,
+                    modInfoJson: room.modInfoJson,
                 };
                 // Send response to the room host
                 ws.send(JSON.stringify(response));
@@ -101,6 +110,8 @@ wss.on('connection', (ws) => {
         }
         else if (data.type === 'joinRoom')
         {
+          console.log(data.roomId);
+
             const room = rooms.get(data.roomId);
             //Check If room exists
             if (room) {
@@ -108,16 +119,29 @@ wss.on('connection', (ws) => {
                 if (!room.currentlyPlaying) {
                     //Check if room has reached maximum players
                     if (room.players.length < room.maxPlayers) {
+                        const playerData = {
+                          currentUpperBodyIndex: data.currentUpperBodyIndex,
+                          currentHairIndex: data.currentHairIndex,
+                          currentBackHairIndex: data.currentBackHairIndex,
+                          currentExpressionIndex: data.currentExpressionIndex,
+                          currentGlassesIndex: data.currentGlassesIndex,
+                          currentTrousersIndex: data.currentTrousersIndex,
+                          currentShoesIndex: data.currentShoesIndex
+                        };
                         // Add the client (student) to the room's list of players
-                        room.players.push(userId);
-
+                        //room.players.push(userId);
+                        room.players.push({
+                          userId: userId,
+                          playerData:playerData
+                        })
                         // Send a response to the client indicating that they have joined the room
                         const wsResponse = {
                             type: 'wsRoomJoined',
                             roomId: room.id,
                             userId: userId,
                             NoP: room.players.length,
-                            mNoP: room.maxPlayers
+                            mNoP: room.maxPlayers,
+                            modInfoJson: room.modInfoJson,
                         };
 
                         const response = {
@@ -125,16 +149,27 @@ wss.on('connection', (ws) => {
                             roomId: room.id,
                             userId: userId,
                             NoP: room.players.length,
-                            mNoP: room.maxPlayers
+                            mNoP: room.maxPlayers,
+
+                        };
+
+                        const hostResponse = {
+                            type: 'hostRoomJoined',
+                            roomId: room.id,
+                            userId: userId,
+                            NoP: room.players.length,
+                            mNoP: room.maxPlayers,
+
                         };
                         console.log('Room Joined by new player');
                         ws.send(JSON.stringify(wsResponse));
                         if (connectedUsers.get(room.host)) {
-                            connectedUsers.get(room.host).send(JSON.stringify(response));
+                            connectedUsers.get(room.host).send(JSON.stringify(hostResponse));
                         }
-                        room.players.forEach(playerId => {
-                            if (connectedUsers.get(playerId)) {
-                                connectedUsers.get(playerId).send(JSON.stringify(response));
+
+                        room.players.forEach(player => {
+                            if (connectedUsers.get(player.userId)) {
+                                connectedUsers.get(player.userId).send(JSON.stringify(response));
                             }
                         });
                     } else {
@@ -179,7 +214,6 @@ wss.on('connection', (ws) => {
                             userId: userId,
                             NoP: room.players.length,
                             mNoP: room.maxPlayers,
-                            //active: room.active, // we need to handle this from frontend <-------- maybe we do not need it
                         };
 
                         const response = {
@@ -191,9 +225,9 @@ wss.on('connection', (ws) => {
                         console.log('Game Started');
                         ws.send(JSON.stringify(wsResponse));
 
-                        room.players.forEach(playerId => {
-                            if (connectedUsers.get(playerId)) {
-                                connectedUsers.get(playerId).send(JSON.stringify(response));
+                        room.players.forEach(player  => {
+                            if (connectedUsers.get(player.userId)) {
+                                connectedUsers.get(player.userId).send(JSON.stringify(response));
                             }
                         });
                     } else {
@@ -208,7 +242,7 @@ wss.on('connection', (ws) => {
                     }
                 } else {
                     const errorResponse = {
-                        type: 'gameIsAlreadyStarted',
+                        type: 'hostGameIsAlreadyStarted',
                         message: 'The game has already started. You cannot start it again until it is finished',
                     };
                     console.log('Game has already started');
@@ -245,9 +279,14 @@ wss.on('connection', (ws) => {
                         };
                         console.log('Gem Found');
 
-                        room.players.forEach(playerId => {
-                            if (connectedUsers.get(playerId)) {
-                                connectedUsers.get(playerId).send(JSON.stringify(response));
+                        // room.players.forEach(playerId => {
+                        //     if (connectedUsers.get(playerId)) {
+                        //         connectedUsers.get(playerId).send(JSON.stringify(response));
+                        //     }
+                        // });
+                        room.players.forEach(player  => {
+                            if (connectedUsers.get(player.userId)) {
+                                connectedUsers.get(player.userId).send(JSON.stringify(response));
                             }
                         });
                     }
@@ -275,10 +314,25 @@ wss.on('connection', (ws) => {
                 console.log('1) Room Found');
                 const foundGem = room.gems.find(gem => gem.locId === data.locId && gem.iaId === data.iaId);
                 if (foundGem) {
-                    console.log('2) Gem Found');
+                    console.log('2) Gem Found'); ///////////////////////////HERE
                     if (foundGem.found) {
                         const playerFound = foundGem.playersAnswered.some(answer => answer === userId);
+                        console.log('2.1) Inside foundGem.found');
+                        ////////////////////
                         if (!playerFound) {
+                          console.log('2.2) Inside playerFound');
+                          // Here I need to do the following
+                            // First I have to get an id of the question
+                            // Next I have to get an id of the answer
+                            // Next I need to find the players's data
+                            // Last I want to send that data to the players
+                            // In the frontend for every question I need to add a list
+                            // Other :
+                            // 1) Other Languages
+                            // 2) More Questions
+                            // 3) Check VPN on mobile
+                            // 4) Fix for different resolutions
+                            // 5) Add the xapis
                             async function processAnswer() {
                                 console.log('3) Entered Async Function');
                                 foundGem.playersAnswered.push(userId);
@@ -339,9 +393,14 @@ wss.on('connection', (ws) => {
                                                 connectedUsers.get(room.host).send(JSON.stringify(hostResponse));
                                             }
 
-                                            room.players.forEach(playerId => {
-                                                if (connectedUsers.get(playerId)) {
-                                                    connectedUsers.get(playerId).send(JSON.stringify(response));
+                                            // room.players.forEach(playerId => {
+                                            //     if (connectedUsers.get(playerId)) {
+                                            //         connectedUsers.get(playerId).send(JSON.stringify(response));
+                                            //     }
+                                            // });
+                                            room.players.forEach(player  => {
+                                                if (connectedUsers.get(player.userId)) {
+                                                    connectedUsers.get(player.userId).send(JSON.stringify(response));
                                                 }
                                             });
                                             console.log('19) Winning Message Sent');
@@ -362,9 +421,14 @@ wss.on('connection', (ws) => {
                                                 connectedUsers.get(room.host).send(JSON.stringify(hostResponse));
                                             }
 
-                                            room.players.forEach(playerId => {
-                                                if (connectedUsers.get(playerId)) {
-                                                    connectedUsers.get(playerId).send(JSON.stringify(response));
+                                            // room.players.forEach(playerId => {
+                                            //     if (connectedUsers.get(playerId)) {
+                                            //         connectedUsers.get(playerId).send(JSON.stringify(response));
+                                            //     }
+                                            // });
+                                            room.players.forEach(player  => {
+                                                if (connectedUsers.get(player.userId)) {
+                                                    connectedUsers.get(player.userId).send(JSON.stringify(response));
                                                 }
                                             });
                                             console.log('19) Losing Message Sent');
@@ -399,13 +463,17 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        console.log('Client disconnected');
+        console.log('Client disconnected! userId: ', userId);
         let wasHost = false;
         let wasPlayer = false;
         let roomIdToRemove = null;
 
         // Iterate through rooms to find the room where the client was the host or a player
         rooms.forEach((room, roomId) => {
+          room.players.forEach(player => {
+            console.log(`Player ID: ${player.userId}`);
+            // Replace 'id' and 'name' with the actual properties you have for each player
+          });
             if (connectedUsers.get(room.host) === ws) {
                 // Client was the host
                 console.log(`Host of room ${roomId} disconnected`);
@@ -419,31 +487,47 @@ wss.on('connection', (ws) => {
                         roomId: roomId,
                         userId: userId,
                     };
-                    room.players.forEach(playerId => {
-                        if (connectedUsers.get(playerId)) {
-                            connectedUsers.get(playerId).send(JSON.stringify(response));
+                    // room.players.forEach(playerId => {
+                    //     if (connectedUsers.get(playerId)) {
+                    //         connectedUsers.get(playerId).send(JSON.stringify(response));
+                    //     }
+                    // });
+                    room.players.forEach(player  => {
+                        if (connectedUsers.get(player.userId)) {
+                            connectedUsers.get(player.userId).send(JSON.stringify(response));
                         }
                     });
                     rooms.delete(roomId);
+                    console.log(`Room ${roomId} deleted`);
                 } else {
+                  if(room.players.length === 0) {
+                    rooms.delete(roomId);
+                  } else {
                     // Room is currently playing, send a message
                     const response = {
                         type: 'hostLeft',
                         roomId: roomId,
                         userId: userId,
                     };
-                    room.players.forEach(playerId => {
-                        if (connectedUsers.get(playerId)) {
-                            connectedUsers.get(playerId).send(JSON.stringify(response));
+                    // room.players.forEach(playerId => {
+                    //     if (connectedUsers.get(playerId)) {
+                    //         connectedUsers.get(playerId).send(JSON.stringify(response));
+                    //     }
+                    // });
+                    room.players.forEach(player  => {
+                        if (connectedUsers.get(player.userId)) {
+                            connectedUsers.get(player.userId).send(JSON.stringify(response));
                         }
                     });
+                  }
+
                 }
-            } else if (room.players.includes(userId)) {
+            } else if (room.players.some(player => player.userId === userId)) { //////////////////CHECK
                 // Client was a player in the room
                 wasPlayer = true;
-                const index = room.players.indexOf(userId);
+                const index = room.players.findIndex(player => player.userId === userId); ////////////////////CHECK
                 if (index !== -1) {
-                    room.players.splice(index, 1);
+                    room.players.splice(index, 1); //////////////////////CHECK
                     //send message that player was removed
                     const response = {
                         type: 'playerLeft',
@@ -452,12 +536,21 @@ wss.on('connection', (ws) => {
                         NoP: room.players.length,
                         mNoP: room.maxPlayers,
                     }
-                    if (connectedUsers.get(room.host)) {
-                        connectedUsers.get(room.host).send(JSON.stringify(response));
+
+                    const hostResponse = {
+                        type: 'hostPlayerLeft',
+                        roomId: roomId,
+                        userId: userId,
+                        NoP: room.players.length,
+                        mNoP: room.maxPlayers,
                     }
-                    room.players.forEach(playerId => {
-                        if (connectedUsers.get(playerId)) {
-                            connectedUsers.get(playerId).send(JSON.stringify(response));
+
+                    if (connectedUsers.get(room.host)) {
+                        connectedUsers.get(room.host).send(JSON.stringify(hostResponse));
+                    }
+                    room.players.forEach(player  => {
+                        if (connectedUsers.get(player.userId)) {
+                            connectedUsers.get(player.userId).send(JSON.stringify(response));
                         }
                     });
 
@@ -466,7 +559,7 @@ wss.on('connection', (ws) => {
                     // Remove the player from room.gems.playersAnswered and room.gems.playersAnsweredCorrectly
                     room.gems.forEach(gem => {
                         if (gem.found) {
-                            if (gem.playersAnswered.includes(userId)) {
+                            if (gem.playersAnswered.includes(userId)) { //////////////////HERE
                                 const playerIndex = gem.playersAnswered.indexOf(userId);
                                 gem.playersAnswered.splice(playerIndex, 1);
                             }
@@ -505,25 +598,86 @@ wss.on('connection', (ws) => {
 
 });
 
+//TIMER
+const ROOM_EXPIRATION_TIME = 3 * 60 * 60 * 1000; // 60 minutes in milliseconds
 
+// Function to check and close expired rooms
+function checkRoomExpiration() {
+  const currentTime = new Date().getTime();
+  console.log("checking time");
+  for (const [roomId, room] of rooms.entries()) {
+    const roomCreationTime = room.creationTime || 0;
+    if (currentTime - roomCreationTime >= ROOM_EXPIRATION_TIME) {
+      // Close the room and notify occupants
+
+      closeRoom(roomId);
+    }
+  }
+}
+
+function closeRoom(roomId) {
+  const room = rooms.get(roomId);
+  if (room) {
+
+    const response = {
+        type: 'roomClosed',
+        roomId: room.id,
+    };
+
+    const hostResponse = {
+        type: 'hostRoomClosed',
+        roomId: room.id,
+      };
+
+    if (connectedUsers.get(room.host)) {
+        connectedUsers.get(room.host).send(JSON.stringify(hostResponse));
+    }
+
+    room.players.forEach(player => {
+        if (connectedUsers.get(player.userId)) {
+            connectedUsers.get(player.userId).send(JSON.stringify(response));
+        }
+    });
+
+    // Remove the room from the rooms Map
+    rooms.delete(roomId);
+
+    console.log(`Room ${roomId} has been closed due to expiration.`);
+  }
+}
+
+// Check every 5 minutes for unused rooms
+setInterval(checkRoomExpiration, 5 * 60 * 1000);
+
+function generateRandomRoomCode() {
+    return Math.floor(1000 + Math.random() * 9000).toString(); // Generates a random number between 100000 and 999999
+}
 
 function generateRandomId() {
     return crypto.randomBytes(8).toString('hex');
 }
 
+
+// Update the compareLists function to compare userIds
 function compareLists(listA, listB) {
     for (const item of listB) {
-        if (!listA.includes(item)) {
+        const userIdA = typeof item === 'object' ? item.userId : item;
+        if (!listA.includes(userIdA)) {
             return false;
         }
     }
     return true;
 }
 
-function compareCorrectAnswerLists(listA, listB) {
-    const countAInB = listA.filter(item => listB.includes(item)).length;
 
-    return countAInB >= listB.length / 2;
+function compareCorrectAnswerLists(listA, listB) {
+    // Extract userId values from listB
+    const userIdsB = listB.map(item => typeof item === 'object' ? item.userId : item);
+
+    // Count the number of userIds in listA that are also in userIdsB
+    const countAInB = listA.filter(item => userIdsB.includes(item)).length;
+
+    return countAInB >= userIdsB.length / 2;
 }
 
 async function waitForBothAnswers(foundGem, room) {
